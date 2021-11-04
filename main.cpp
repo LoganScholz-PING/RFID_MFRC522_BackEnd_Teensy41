@@ -3,10 +3,10 @@
 #include <Arduino.h>
 
 // MFRC522 Vars
-#define RST_PIN         9           // Configurable, see typical pin layout above
-#define SS_PIN          10          // Configurable, see typical pin layout above
+#define RST_PIN         9
+#define SS_PIN          10
 
-MFRC522 mfrc522(SS_PIN, RST_PIN);   // Create MFRC522 instance
+MFRC522 mfrc522(SS_PIN, RST_PIN);
 
 // serial comm vars
 #define SOP '<' // denotes start of serial data packet
@@ -21,17 +21,17 @@ boolean ended   = false;   // serial data flow control
 
 void setup() 
 {
-  Serial.begin(115200);                                         // Initialize serial communications with the PC
-  SPI.begin();                                                  // Init SPI bus
-  mfrc522.PCD_Init();                                           // Init MFRC522 card
-  //Serial.println("[INFO] Finished Initialization.");
+  Serial.begin(115200);
+  SPI.begin();
+  mfrc522.PCD_Init();
 }
 
 
 /* ***********************************************************
  * FUNCTION NAME: readRFID()
  *    
- *    SUMMARY: read the workorder block from the RFID (if present)
+ * SUMMARY: read the workorder block from the RFID (if present)
+ * (workorder is stored in block 1, bytes 0-6)
  * ***********************************************************/
 void readRFID()
 {
@@ -39,25 +39,26 @@ void readRFID()
   MFRC522::MIFARE_Key key;
   for (byte i = 0; i < 6; i++) key.keyByte[i] = 0xFF;
 
-  //some variables we need
   bool skipnormalconn = false;
-  byte block;
+  
   MFRC522::StatusCode status;
   MFRC522::StatusCode wakeupstatus;
+
   byte bufferATQA1[2];
   byte bufferSize1 = 2;
   byte buffer2[18]; // must be minimum 18 for MIFARE_Read() -- 16 bytes for block and 2 bytes for CRC
-  
   byte len = 18;
+  byte block;
 
-  // *************** TEST CARD WAKE-UP AND RE-SELECTION **************
-  // *************** (try to move HALT cards to READY* state)
-  // ***** HALT -> READY* = WUPA -> SELECT (should be READY* after SELECT)
+  // *************** CARD WAKE-UP AND RE-SELECTION *************************
+  // *************** (try to move HALT cards to READY* state) **************
+  // ***** HALT -> READY* = WUPA -> SELECT (should be READY* after SELECT) *
+  // ***********************************************************************
 
   // Look for new cards and attempt to wake up sleeping cards
   if ( ! mfrc522.PICC_IsNewCardPresent() ) 
   {
-    // card may be in HALT state so let's try to wake it up (move it to READY state)
+    // card may be in HALT state so let's try to wake it up
     // if this fails there is probably no card present on the reader
     wakeupstatus = mfrc522.PICC_WakeupA(bufferATQA1, &bufferSize1);
 
@@ -72,11 +73,7 @@ void readRFID()
         Serial.println(mfrc522.GetStatusCodeName(wakeupstatus));
         return;
       }
-      else
-      {
-        // we have successfully reset communication with the card
-        skipnormalconn = true;
-      }
+      else { skipnormalconn = true; }
     }
     else
     {
@@ -84,7 +81,7 @@ void readRFID()
       return;
     }
   }
-  // *************** END TEST **************
+  // *************** END card HALT->READY* state transition **************
 
 
   // Select one of the cards
@@ -97,7 +94,6 @@ void readRFID()
     }
   }
   
-
   //---------------------------------------- GET WORKORDER
 
   status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, 1, &key, &(mfrc522.uid)); //line 834
@@ -116,20 +112,13 @@ void readRFID()
     return;
   }
 
-  // --------------------------------  
-
-  //Serial.println(F("[INFO] ATTEMPTING TO READ WORKORDER"));
-
-  //Serial.print("[INFO] Size of buffer2: ");
-  //Serial.println(sizeof(buffer2));
-
   if (sizeof(buffer2) > 0)
   {
     char wo[11];
 
     // we are here because the read operation was successful
-    // and buffer2 contains data (buffer2 contains all bytes of block 1)
-    //    the only bytes of buffer2 we care about are 0-6
+    // and buffer2 contains data (buffer2 contains all 16 bytes of block 1 + 2 byte CRC)
+    //    ** the only bytes of buffer2 we care about are 0-6 ** 
 
     // start building response serial packet:
     wo[0] = '<';
@@ -138,10 +127,12 @@ void readRFID()
 
     for (uint8_t j = 0; j < 7; j++)
     {
+      // TODO(IDEA): Check if buffer2[j] value is between: 
+      //    DEC 48 (HEX 0x30) [ASCII 0] and DEC 57 (HEX 0x39) [ASCII 9]         
       if (buffer2[j] == 32 || buffer2[j] == 0) // dec 32 = hex 0x20 = ASCII "SPACE"  || dec 0 = hex 0x00 = NULL
       {
-        // get rid of blanks or other non-standard ASCII characters
-        //  - replace them with highly visible ASCII character so C#
+        // get rid of blanks, NULLS, or other non-standard ASCII characters
+        //  - replace them with a highly visible ASCII character so C#
         //    can easily check for this on the front-end
         wo[j+3] = '#';
       }
@@ -152,6 +143,7 @@ void readRFID()
       }
     } 
 
+    // finish the Tx packet and prepare to send to C# over serial comm
     wo[10] = (char)'>';
 
     for (uint8_t i = 0; i < 11; i++)
@@ -400,9 +392,9 @@ void loop()
   //
   checkSerial();
 
-  // if you don't the 2 lines below then the Teensy wastes ~ 30-40mA continuously and gets hot
+  // if you don't do the 2 lines below then the Teensy wastes ~ 30-40mA continuously and gets hot
   // when you don't do these things Teensy uses 110-120mA continuously
-  // when you DO these things the Teensy uses 80-90mA continuously
+  // when you DO these things the Teensy uses 80-90mA continuously (everything still works as normal)
   mfrc522.PICC_HaltA(); 
   mfrc522.PCD_StopCrypto1();
 }
