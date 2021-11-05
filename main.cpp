@@ -21,7 +21,7 @@ boolean ended   = false;   // serial data flow control
 
 void setup() 
 {
-  Serial.begin(115200);
+  Serial.begin(9600);
   SPI.begin();
   mfrc522.PCD_Init();
 }
@@ -178,68 +178,79 @@ void readRFID()
 /* ***********************************************************
  * FUNCTION NAME: writeRFID()
  *    
- *    SUMMARY: write a 7 digit workorder to block1 + block2 
+ *    SUMMARY: write a 7 digit workorder to block1 
  * ***********************************************************/
-void writeRFID()
+void writeRFID(char in_wo[])
 {
-  //Serial.println(F("[INFO] BEGINNING WRITE PROCESS! DO NOT MOVE PICC!"));    // print to serial
-
+  bool skipnormalconn = false;
+  byte bufferATQA1[2];
+  byte bufferSize1 = 2;
+  
   // Prepare key - all keys are set to FFFFFFFFFFFFh at chip delivery from the factory.
   MFRC522::MIFARE_Key key;
   for (byte i = 0; i < 6; i++) key.keyByte[i] = 0xFF;
 
   // Look for new cards
-  if ( ! mfrc522.PICC_IsNewCardPresent()) {
-    return;
+  if ( ! mfrc522.PICC_IsNewCardPresent()) 
+  {
+    // card may be in HALT state so let's try to wake it up
+    // if this fails there is probably no card present on the reader
+    MFRC522::StatusCode wakeupstatus = mfrc522.PICC_WakeupA(bufferATQA1, &bufferSize1);
+
+    if ( wakeupstatus == MFRC522::STATUS_OK )
+    {
+      //Serial.println("[INFO] PICC_WakeupA status OK! Attempting to Select.");
+      wakeupstatus = mfrc522.PICC_Select(&(mfrc522.uid), mfrc522.uid.size);
+
+      if ( ! wakeupstatus == MFRC522::STATUS_OK )
+      {
+        Serial.print(F("[ERROR-Write] Failed to wake up tag. Status code = "));
+        Serial.println(mfrc522.GetStatusCodeName(wakeupstatus));
+        return;
+      }
+      else { skipnormalconn = true; }
+    }
+    else
+    {
+      Serial.println(F("[INFO-Write] Attempt to read but no working tag present!"));
+      return;
+    }
   }
 
-  // Select one of the cards
-  if ( ! mfrc522.PICC_ReadCardSerial()) {
-    return;
+  if (!skipnormalconn)
+  {
+    // Select one of the cards
+    if ( ! mfrc522.PICC_ReadCardSerial()) 
+    {
+      Serial.println("[ISSUE-Write] PICC_ReadCardSerial() Failed!");
+      return;
+    }
   }
 
-  //Serial.print(F("Card UID:"));    //Dump UID
-  for (byte i = 0; i < mfrc522.uid.size; i++) {
-    //Serial.print(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " ");
-    //Serial.print(mfrc522.uid.uidByte[i], HEX);
-  }
-
-  //Serial.print(F(" PICC type: "));   // Dump PICC type
-  MFRC522::PICC_Type piccType = mfrc522.PICC_GetType(mfrc522.uid.sak);
-  //Serial.println(mfrc522.PICC_GetTypeName(piccType));
-
-  byte buffer[34];
+  byte buffer[18];
   byte block;
   MFRC522::StatusCode status;
-  byte len;
 
-  //Serial.setTimeout(20000L) ;     // wait until 20 seconds for input from serial
-  // Ask personal data: Family name
-  
-    /* !!!!!!! TODO !!!!!!!
-     * This is where the workorder from C# will be pushed in
-     * (instead of reading from serial)
-     * 
-     * Question:
-     * 1. Do we NEED 2 blocks if we know that we are only storing a 
-     *    7 digit integer #?
-     */
-
-  //Serial.println(F("Type workorder, ending with # (ex: \"1234567#\""));
-  len = Serial.readBytesUntil('#', (char *) buffer, 30) ; // read workorder # from serial
-  for (byte i = len; i < 30; i++) buffer[i] = ' ';     // pad with spaces
+  for (byte i = 0; i < 16; ++i)
+  {
+    if (i < 7) // load the workorder data first
+    {
+      buffer[i] = in_wo[i];
+    }
+    else // pad the rest of block 1 with spaces (hex 0x20, decimal 32)
+    {
+      buffer[i] = ' ';
+    }
+  }
 
   block = 1;
   ////Serial.println(F("Authenticating using key A..."));
   status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, block, &key, &(mfrc522.uid));
-  if (status != MFRC522::STATUS_OK) {
+  if (status != MFRC522::STATUS_OK) 
+  {
     Serial.print(F("PCD_Authenticate() (block 1) failed: "));
     Serial.println(mfrc522.GetStatusCodeName(status));
     return;
-  }
-  else
-  {
-    //Serial.println(F("PCD_Authenticate() (block 1) success: "));
   }
 
   // Write block
@@ -249,81 +260,18 @@ void writeRFID()
     Serial.println(mfrc522.GetStatusCodeName(status));
     return;
   }
-  else
-  {
-    //Serial.println(F("Write() workorder to block 1 success!"));
-  } 
-
-  block = 2;
-  ////Serial.println(F("Authenticating using key A..."));
-  status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, block, &key, &(mfrc522.uid));
-  if (status != MFRC522::STATUS_OK) {
-    Serial.print(F("PCD_Authenticate() (block 2) failed: "));
-    Serial.println(mfrc522.GetStatusCodeName(status));
-    return;
-  }
-
-  // Write block
-  status = mfrc522.MIFARE_Write(block, &buffer[16], 16);
-  if (status != MFRC522::STATUS_OK) {
-    //Serial.print(F("Write() block 2 failed: "));
-    //Serial.println(mfrc522.GetStatusCodeName(status));
-    return;
-  }
-  else
-  {
-    //Serial.println(F("Write() block 2 success!"));
-  } 
-
-  // // Ask personal data: First name
-  // //Serial.println(F("Type First name, ending with #"));
-  // len = //Serial.readBytesUntil('#', (char *) buffer, 20) ; // read first name from serial
-  // for (byte i = len; i < 20; i++) buffer[i] = ' ';     // pad with spaces
-
-  // block = 4;
-  // ////Serial.println(F("Authenticating using key A..."));
-  // status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, block, &key, &(mfrc522.uid));
-  // if (status != MFRC522::STATUS_OK) {
-  //   //Serial.print(F("PCD_Authenticate() failed: "));
-  //   //Serial.println(mfrc522.GetStatusCodeName(status));
-  //   return;
-  // }
-
-  // // Write block
-  // status = mfrc522.MIFARE_Write(block, buffer, 16);
-  // if (status != MFRC522::STATUS_OK) {
-  //   //Serial.print(F("MIFARE_Write() failed: "));
-  //   //Serial.println(mfrc522.GetStatusCodeName(status));
-  //   return;
-  // }
-  // else //Serial.println(F("MIFARE_Write() success: "));
-
-  // block = 5;
-  // ////Serial.println(F("Authenticating using key A..."));
-  // status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, block, &key, &(mfrc522.uid));
-  // if (status != MFRC522::STATUS_OK) {
-  //   //Serial.print(F("PCD_Authenticate() failed: "));
-  //   //Serial.println(mfrc522.GetStatusCodeName(status));
-  //   return;
-  // }
-
-  // // Write block
-  // status = mfrc522.MIFARE_Write(block, &buffer[16], 16);
-  // if (status != MFRC522::STATUS_OK) {
-  //   //Serial.print(F("MIFARE_Write() failed: "));
-  //   //Serial.println(mfrc522.GetStatusCodeName(status));
-  //   return;
-  // }
-  // else 
-  // {
-  //   //Serial.println(F("MIFARE_Write() success!"));
-  // } 
-  
-  //Serial.println(" ");
 
   mfrc522.PICC_HaltA(); // Halt PICC
   mfrc522.PCD_StopCrypto1();  // Stop encryption on PCD
 }
+
+
+
+
+
+
+
+
 
 
 void checkSerial() {
@@ -348,7 +296,7 @@ void checkSerial() {
     }
     else
     {
-      if (idx < 79) {
+      if (idx < 20) {
         serialData[idx] = inChar;
         ++idx;
         serialData[idx] = '\0';
@@ -360,12 +308,28 @@ void checkSerial() {
     // received, begin packet processing
     switch (serialData[0]) {
       case 'W':
-        // STRIP OUT W/O THEN WRITE IT
-        // The "write" packet from C# looks like this:
-        //      [0123456789]
-        //      "<W:1234567>"
-        writeRFID();
+      {
+        char rxWO[7];
+        int count = 0;
+
+        for(int q = 0; q < 7; ++q)
+        {
+          if(serialData[q+2] == '\0')
+          {
+            break;
+          }
+          else
+          {
+            rxWO[q] = (char)serialData[q+2];
+            count = q;
+          }
+        }
+
+        rxWO[count+1] = '\0'; // add the escape character to the end
+
+        writeRFID(rxWO);
         break;
+      }
       case 'R':
         // READ W/O FROM CARD
         readRFID();
@@ -382,7 +346,11 @@ void checkSerial() {
     started = false;
     ended = false;
     idx = 0;
-    serialData[idx] = '\0';
+    //serialData[idx] = '\0';
+    for (byte i = 0; i < sizeof(serialData); ++i)
+    {
+      serialData[i] = '\0';
+    }
   }
 }
 
